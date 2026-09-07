@@ -59,4 +59,11 @@ Please install the "Desktop development with C++" workload, including all of its
 [√] Connected device (3 available)
 [√] Network resources
 
+## 4. 첫 Flutter 웹 앱 실행 실습 (1차)(20260907)
+
+- **실습 목표**: `flutter create my_first_app` 명령어로 기본 템플릿 생성 후 Chrome 브라우저 환경에서 실행
+- **실행 명령어**: `cd my_first_app, 이후 flutter run -d chrome`
+- **결과**: 브라우저에서 기본 카운터 앱이 정상 구동되었으며, 버튼 클릭 시 카운트 증가 동작 확인
+
 ! Doctor found issues in 1 category.
+![alt text](image.png)
