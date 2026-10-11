@@ -38,17 +38,18 @@ class GoalTrackerHomePage extends StatefulWidget {
 class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
   final TextEditingController _textController = TextEditingController();
 
-  // 초기 리스트 데이터
   final List<GoalItem> _goals = [
     GoalItem(title: 'Flutter 기본 위젯 공식 문서 읽기', isCompleted: true),
     GoalItem(title: 'Column과 ListView 조합 레이아웃 완성', isCompleted: true),
     GoalItem(title: 'flutter analyze 경고 0건 달성하기', isCompleted: false),
   ];
 
-  // 완료된 항목 수 계산
   int get _completedCount => _goals.where((g) => g.isCompleted).length;
 
-  // 목표 추가 핸들러
+  // [신규] 달성률 비율 계산 (0.0 ~ 1.0)
+  double get _progressRate =>
+      _goals.isEmpty ? 0.0 : _completedCount / _goals.length;
+
   void _addGoal() {
     final String text = _textController.text.trim();
     if (text.isEmpty) return;
@@ -59,14 +60,12 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
     });
   }
 
-  // 완료 상태 토글 핸들러
   void _toggleGoal(int index) {
     setState(() {
       _goals[index].isCompleted = !_goals[index].isCompleted;
     });
   }
 
-  // 항목 삭제 핸들러
   void _deleteGoal(int index) {
     setState(() {
       _goals.removeAt(index);
@@ -82,9 +81,10 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // [신규] 달성률 정수 퍼센트 (예: 67%)
+    final int progressPercent = (_progressRate * 100).toInt();
 
     return Scaffold(
-      // [검증 1] Scaffold와 AppBar로 전체 화면 틀 구성
       appBar: AppBar(
         title: const Text(
           '학습 목표 관리 대시보드',
@@ -93,42 +93,86 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
         centerTitle: true,
         backgroundColor: theme.colorScheme.inversePrimary,
       ),
-      // [검증 3] Column(수직 배치) 사용
       body: Column(
         children: [
-          // 1. 상단 통계 요약 카드 (Row + Column + Text + Icon)
+          // 1. 상단 통계 요약 카드 + 달성률 프로그레스 바
           Container(
             margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: theme.colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+            child: Column(
               children: [
-                _buildStatItem(
-                  icon: Icons.checklist_rounded,
-                  label: '전체 목표',
-                  value: '${_goals.length}개',
-                  iconColor: theme.colorScheme.primary,
+                // 통계 개수 행
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildStatItem(
+                      icon: Icons.checklist_rounded,
+                      label: '전체 목표',
+                      value: '${_goals.length}개',
+                      iconColor: theme.colorScheme.primary,
+                    ),
+                    Container(
+                      height: 40,
+                      width: 1,
+                      color: theme.colorScheme.outlineVariant,
+                    ),
+                    _buildStatItem(
+                      icon: Icons.task_alt_rounded,
+                      label: '달성 완료',
+                      value: '$_completedCount개',
+                      iconColor: Colors.green,
+                    ),
+                  ],
                 ),
-                Container(
-                  height: 40,
-                  width: 1,
-                  color: theme.colorScheme.outlineVariant,
+                const SizedBox(height: 16),
+                const Divider(height: 1),
+                const SizedBox(height: 12),
+
+                // [신규] 달성률 레이블 & 퍼센트 텍스트
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '목표 달성률',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                    Text(
+                      '$progressPercent%',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
                 ),
-                _buildStatItem(
-                  icon: Icons.task_alt_rounded,
-                  label: '달성 완료',
-                  value: '$_completedCount개',
-                  iconColor: Colors.green,
+                const SizedBox(height: 8),
+
+                // [신규] 둥근 모서리의 게이지 바
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: _progressRate,
+                    minHeight: 10,
+                    backgroundColor: theme.colorScheme.surface,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      progressPercent == 100 ? Colors.green : theme.colorScheme.primary,
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
 
-          // 2. 신규 목표 입력 바 (Row + TextField + ElevatedButton)
+          // 2. 신규 목표 입력 바
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
@@ -141,23 +185,18 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.all(Radius.circular(12)),
                       ),
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     ),
                     onSubmitted: (_) => _addGoal(),
                   ),
                 ),
                 const SizedBox(width: 8),
-                // [검증 4] 버튼 클릭 시 동작 및 화면 갱신
                 ElevatedButton.icon(
                   onPressed: _addGoal,
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
+                        horizontal: 16, vertical: 14),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -171,8 +210,7 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
 
           const SizedBox(height: 16),
 
-          // 3. 목표 목록 스크롤 뷰 (ListView.builder 사용)
-          // [검증 3] ListView로 동적 반복 목록 스크롤 배치
+          // 3. 목표 목록 스크롤 뷰
           Expanded(
             child: _goals.isEmpty
                 ? const Center(
@@ -194,19 +232,16 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: ListTile(
-                          // [검증 2] Icon 사용
                           leading: IconButton(
                             icon: Icon(
                               item.isCompleted
                                   ? Icons.check_circle_rounded
                                   : Icons.radio_button_unchecked_rounded,
-                              color: item.isCompleted
-                                  ? Colors.green
-                                  : Colors.grey,
+                              color:
+                                  item.isCompleted ? Colors.green : Colors.grey,
                             ),
                             onPressed: () => _toggleGoal(index),
                           ),
-                          // [검증 2] Text 사용 (상태에 따른 스타일 분기)
                           title: Text(
                             item.title,
                             style: TextStyle(
@@ -220,10 +255,8 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
                             ),
                           ),
                           trailing: IconButton(
-                            icon: const Icon(
-                              Icons.delete_outline,
-                              color: Colors.redAccent,
-                            ),
+                            icon: const Icon(Icons.delete_outline,
+                                color: Colors.redAccent),
                             onPressed: () => _deleteGoal(index),
                           ),
                         ),
@@ -236,7 +269,6 @@ class _GoalTrackerHomePageState extends State<GoalTrackerHomePage> {
     );
   }
 
-  // 상단 통계 단일 아이템 빌더
   Widget _buildStatItem({
     required IconData icon,
     required String label,
