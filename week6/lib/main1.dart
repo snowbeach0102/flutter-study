@@ -1,68 +1,43 @@
-// ============================================================================
-// # Enterprise Real-Time Notice Operations Center
-//
-// 1. Architecture Overview:
-//    - Single Source of Truth (SSOT):
-//      `_allNotices` 캐시를 원본 진실 공급원으로 유지하며, 검색 및 필터링 결과인
-//      `_displayedNotices`를 파생 상태로 분리하여 데이터 일관성을 보장합니다.
-//    - Web-Safe Concurrency & Worker Fallback:
-//      Flutter Web(Chrome)과 모바일 런타임 간의 스레딩 모델 차이를 극복하기 위해
-//      네이티브 Isolate 직접 생성 대신 `compute()` 추상화 계층을 사용합니다.
-//      이를 통해 모바일에서는 백그라운드 Worker Isolate가 스폰되고, 웹 브라우저에서는
-//      단일 이벤트 루프 블로킹 없는 비동기 이벤트 분배로 안전하게 폴백됩니다.
-//
-// 2. Asynchronous Technology Stack Matrix:
-//    - Future<T> & async/await : 초기 50건의 대량 공지 REST API 모의 호출 및 갱신.
-//    - Stream<T> (Broadcast)   : Server-Sent Events(SSE) 모의 긴급 장애 속보 파이프라인.
-//    - compute() (Isolate)     : 대량 본문 전체 텍스트(Full-text) 검색 시 UI 스레드 부하 격리.
-//
-// 3. Lifecycle & Resource Management:
-//    - State 객체 소멸 시 `StreamSubscription.cancel()`, `Timer.cancel()`,
-//      `StreamController.close()`, `TextEditingController.dispose()`를 누락 없이 수행하여
-//      엔터프라이즈 환경에서의 메모리 누수(Memory Leak)를 원천 차단합니다.
-//
-// 4. Static Analysis & Lint Compliance:
-//    - 미사용 필드(Unused field) 배제 및 불필요한 `const Transform.scale` 제거를 준수하여
-//      `flutter analyze` 린트 경고 0건(No issues found!)을 충족합니다.
-// ============================================================================
-
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 void main() {
-  runApp(const NoticeProductionApp());
+  runApp(const EnterpriseNoticeApp());
 }
 
-class NoticeProductionApp extends StatelessWidget {
-  const NoticeProductionApp({super.key});
+class EnterpriseNoticeApp extends StatelessWidget {
+  const EnterpriseNoticeApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Enterprise Notice Operations Center',
+      title: '스마트 공지사항 시스템',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0F172A),
-          primary: const Color(0xFF0284C7),
+          seedColor: const Color(0xFF0284C7),
+          primary: const Color(0xFF0369A1),
           surface: const Color(0xFFF8FAFC),
         ),
+        scaffoldBackgroundColor: const Color(0xFFF1F5F9),
       ),
-      home: const NoticeDashboardPage(),
+      home: const NoticeDashboardScreen(),
     );
   }
 }
 
-/// [데이터 모델] 공지사항 규격 모델
+// ============================================================================
+// 1. 도메인 모델 (Domain Model)
+// ============================================================================
 class NoticeItem {
-  final String id;
+  final int id;
   final String title;
   final String content;
   final String category;
-  final DateTime createdAt;
+  final String date;
   final bool isUrgent;
 
   NoticeItem({
@@ -70,224 +45,197 @@ class NoticeItem {
     required this.title,
     required this.content,
     required this.category,
-    required this.createdAt,
+    required this.date,
     this.isUrgent = false,
   });
 
-  // Isolate 및 Web Worker 간 메시지 패싱에 안전하도록 원시 Map 변환 지원
-  Map<String, dynamic> toMap() => {
-    'id': id,
-    'title': title,
-    'content': content,
-    'category': category,
-    'createdAt': createdAt.toIso8601String(),
-    'isUrgent': isUrgent,
-  };
-
   factory NoticeItem.fromMap(Map<String, dynamic> map) {
     return NoticeItem(
-      id: map['id'] as String,
+      id: map['id'] as int,
       title: map['title'] as String,
       content: map['content'] as String,
       category: map['category'] as String,
-      createdAt: DateTime.parse(map['createdAt'] as String),
-      isUrgent: map['isUrgent'] as bool,
+      date: map['date'] as String,
+      isUrgent: map['isUrgent'] as bool? ?? false,
     );
   }
 }
 
-/// [Isolate Worker 탑레벨 함수]
-/// 대량 공지 목록에서 검색어를 필터링하는 CPU 집약적 연산 처리 함수.
-/// compute()에 전달하기 위해 반드시 최상위(Top-level) 순수 함수로 선언합니다.
-List<Map<String, dynamic>> _filterNoticesInBackground(
-  Map<String, dynamic> params,
-) {
-  final List<dynamic> rawList = params['notices'] as List<dynamic>;
-  final String query = (params['query'] as String).toLowerCase();
+// ============================================================================
+// 2. 비즈니스 서비스 & 비동기 레이어 (Service Layer)
+//    - Future<T>, async/await, Stream<T>, Isolate (compute)
+// ============================================================================
+class NoticeService {
+  // [A] Future<T> & async/await: 네트워크 API 통신 모사
+  static Future<List<NoticeItem>> fetchNotices() async {
+    // 네트워크 I/O 지연 시간 시뮬레이션
+    await Future.delayed(const Duration(milliseconds: 900));
 
-  return rawList
-      .where((raw) {
-        final title = (raw['title'] as String).toLowerCase();
-        final content = (raw['content'] as String).toLowerCase();
-        return title.contains(query) || content.contains(query);
-      })
-      .cast<Map<String, dynamic>>()
-      .toList();
+    // 원시 데이터(Raw Mock Data)
+    final rawData = [
+      {
+        'id': 101,
+        'title': '[안내] 2026학년도 2학기 수강신청 최종 정정 기간 공지',
+        'content': '수강신청 정정 기간은 금주 금요일 18:00까지이며 기한 후 추가 신청은 불가합니다.',
+        'category': '학사',
+        'date': '2026-10-19',
+        'isUrgent': true,
+      },
+      {
+        'id': 102,
+        'title': '[점검] 학사 포털 시스템 보안 패치 및 데이터베이스 정기 점검',
+        'content': '10월 22일(목) 새벽 02:00부터 05:00까지 서비스 접근이 일시 중단됩니다.',
+        'category': '전산',
+        'date': '2026-10-18',
+        'isUrgent': false,
+      },
+      {
+        'id': 103,
+        'title': '[장학] 2026년 하반기 성적우수 및 동문 산학장학금 신청 서류 접수',
+        'content': '학생처 장학복지팀을 통해 신청서 및 소득증빙서류 원본을 구비하여 제출하시기 바랍니다.',
+        'category': '장학',
+        'date': '2026-10-15',
+        'isUrgent': false,
+      },
+      {
+        'id': 104,
+        'title': '[채용] 하반기 IT 엔지니어링 동계 인턴십 모집 공고',
+        'content': '소프트웨어, 클라우드 인프라, 모바일 앱 분야 인턴십 서류 접수가 진행 중입니다.',
+        'category': '취업',
+        'date': '2026-10-12',
+        'isUrgent': false,
+      },
+      {
+        'id': 105,
+        'title': '[시설] 도서관 열람실 냉난방 공조기 교체 작업에 따른 소음 안내',
+        'content': '제2열람실 소음 발생 예상 시간은 오전 09시부터 12시까지입니다.',
+        'category': '시설',
+        'date': '2026-10-10',
+        'isUrgent': false,
+      },
+    ];
+
+    return rawData.map((e) => NoticeItem.fromMap(e)).toList();
+  }
+
+  // [B] Stream<T>: 실시간 속보 / 긴급 방송 푸시 스트림
+  //     WebSocket 또는 SSE(Server-Sent Events)를 모방하여 4초마다 새 긴급 공지를 스트리밍 방출
+  static Stream<String> urgentNoticeStream() async* {
+    final urgentAlerts = [
+      '⚡ [속보] 학사지원처 서버 긴급 증설 완료 (정상 접속 가능)',
+      '🚨 [안내] 금일 학생식당 점심시간 결제 단말기 점검 진행',
+      '📢 [필독] 5주차 비동기 상태 관리 과제 제출 기한 D-1',
+      '⚠️ [기상] 캠퍼스 내 강풍 주의보 발효에 따른 낙하물 유의',
+    ];
+
+    int index = 0;
+    while (true) {
+      await Future.delayed(const Duration(seconds: 4));
+      yield urgentAlerts[index % urgentAlerts.length];
+      index++;
+    }
+  }
+
+  // [C] Isolate (compute): 무거운 검색 및 문자열 필터링 연산
+  //     Chrome Web과 Windows Desktop 양쪽 모두에서 메인 UI 스레드 버벅임(Jank) 없이 작동
+  static Future<List<NoticeItem>> searchFilterWithIsolate({
+    required List<NoticeItem> list,
+    required String query,
+  }) async {
+    if (query.trim().isEmpty) return list;
+
+    // Isolate로 격리 실행할 패킷 객체 포장
+    final payload = _FilterPayload(list: list, query: query);
+
+    // compute: 웹(Web) 환경과 네이티브(Desktop) 환경을 자동 식별하여 Isolate 태스크 분기 처리
+    return await compute(_filterWorker, payload);
+  }
 }
 
-class NoticeDashboardPage extends StatefulWidget {
-  const NoticeDashboardPage({super.key});
+// Isolate에 전달할 순수 데이터 페이로드
+class _FilterPayload {
+  final List<NoticeItem> list;
+  final String query;
+
+  _FilterPayload({required this.list, required this.query});
+}
+
+// 최상위 전역 함수(Top-level function): Isolate가 메인 스레드와 별개 공간에서 실행하는 작업
+List<NoticeItem> _filterWorker(_FilterPayload payload) {
+  final q = payload.query.toLowerCase().trim();
+  return payload.list.where((item) {
+    final titleMatch = item.title.toLowerCase().contains(q);
+    final contentMatch = item.content.toLowerCase().contains(q);
+    final categoryMatch = item.category.toLowerCase().contains(q);
+    return titleMatch || contentMatch || categoryMatch;
+  }).toList();
+}
+
+// ============================================================================
+// 3. UI Presentation Layer
+// ============================================================================
+class NoticeDashboardScreen extends StatefulWidget {
+  const NoticeDashboardScreen({super.key});
 
   @override
-  State<NoticeDashboardPage> createState() => _NoticeDashboardPageState();
+  State<NoticeDashboardScreen> createState() => _NoticeDashboardScreenState();
 }
 
-class _NoticeDashboardPageState extends State<NoticeDashboardPage> {
-  // 1. 단일 진실 공급원(SSOT) 원본 데이터 캐시
+class _NoticeDashboardScreenState extends State<NoticeDashboardScreen> {
+  // 1) Future 캐싱 및 상태
+  late Future<List<NoticeItem>> _noticeFuture;
   List<NoticeItem> _allNotices = [];
+  List<NoticeItem> _filteredNotices = [];
 
-  // 2. 화면 렌더링용 파생 상태 목록
-  List<NoticeItem> _displayedNotices = [];
+  // 2) Stream 컨트롤러 & 캐시
+  late final Stream<String> _urgentStream;
 
-  bool _isLoading = false;
-  bool _isSearching = false;
-
-  // 3. Stream 파이프라인: 실시간 긴급 공지 제어
-  late final StreamController<NoticeItem> _urgentNoticeStreamController;
-  StreamSubscription<NoticeItem>? _urgentNoticeSubscription;
-  Timer? _urgentNoticeMockTimer;
-  NoticeItem? _latestUrgentNotice;
-
+  // 3) 검색 컨트롤러 및 연산 상태
   final TextEditingController _searchController = TextEditingController();
+  bool _isFiltering = false;
 
   @override
   void initState() {
     super.initState();
-    _initUrgentNoticeStream();
-    _fetchNotices(); // AC-1: 초기 로드 실행
+    // Future 로드 초기화
+    _loadNotices();
+    // 실시간 긴급 공지 Stream 구독 준비
+    _urgentStream = NoticeService.urgentNoticeStream();
   }
 
   @override
   void dispose() {
-    // 엄격한 리소스 정리: 메모리 릭 원천 방지
-    _urgentNoticeSubscription?.cancel();
-    _urgentNoticeMockTimer?.cancel();
-    _urgentNoticeStreamController.close();
     _searchController.dispose();
     super.dispose();
   }
 
-  // --------------------------------------------------------------------------
-  // [AC-1 충족]: Future<T> & async/await 기반 단발성 Mock REST API 패치
-  // --------------------------------------------------------------------------
-  Future<void> _fetchNotices() async {
-    setState(() => _isLoading = true);
+  // async/await를 이용한 수동 새로고침 처리
+  Future<void> _loadNotices() async {
+    setState(() {
+      _noticeFuture = NoticeService.fetchNotices();
+    });
 
-    try {
-      final List<NoticeItem> fetchedData = await _mockFetchNoticesFromApi();
-
-      if (mounted) {
-        setState(() {
-          _allNotices = fetchedData;
-          _displayedNotices = fetchedData;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('공지사항 로드 중 오류가 발생했습니다: $e')));
-      }
-    }
-  }
-
-  Future<List<NoticeItem>> _mockFetchNoticesFromApi() async {
-    // 네트워크 왕복 지연 시뮬레이션
-    await Future.delayed(const Duration(milliseconds: 700));
-
-    // AC-1 요구사항: 50건의 엔터프라이즈 모의 공지사항 생성
-    return List.generate(50, (index) {
-      final id = index + 1;
-      final isMaintenance = id % 7 == 0;
-      final isTerms = id % 5 == 0;
-
-      final category = isMaintenance ? '시스템' : (isTerms ? '약관' : '일반');
-      final title = isMaintenance
-          ? '[$id] 정기 인프라 보안 패치 및 서버 점검 작업 안내'
-          : (isTerms
-                ? '[$id] 통합 플랫폼 서비스 이용약관 및 개인정보 처리방침 개정'
-                : '[$id] 안정적인 대규모 트래픽 처리를 위한 운영 공지');
-
-      final content =
-          '본 공지사항(식별번호: NOTC-$id)은 엔터프라이즈 관제 센터에서 배포한 공식 통지문입니다. '
-          '시스템의 가용성을 유지하기 위해 지속적으로 상태가 모니터링됩니다.';
-
-      return NoticeItem(
-        id: 'NOTC-$id',
-        title: title,
-        content: content,
-        category: category,
-        createdAt: DateTime.now().subtract(Duration(hours: id * 3)),
-        isUrgent: false,
-      );
+    final data = await _noticeFuture;
+    setState(() {
+      _allNotices = data;
+      _filteredNotices = data;
     });
   }
 
-  // --------------------------------------------------------------------------
-  // [AC-2 충족]: Stream<T> 기반 실시간 장애/긴급 속보 수신 파이프라인
-  // --------------------------------------------------------------------------
-  void _initUrgentNoticeStream() {
-    _urgentNoticeStreamController = StreamController<NoticeItem>.broadcast();
+  // 검색어 입력 시 Isolate 기반 필터링 트리거
+  Future<void> _onSearchChanged(String text) async {
+    setState(() => _isFiltering = true);
 
-    // 15초 주기로 서버에서 내려오는 푸시 알림 시뮬레이션
-    _urgentNoticeMockTimer = Timer.periodic(const Duration(seconds: 15), (
-      timer,
-    ) {
-      if (!_urgentNoticeStreamController.isClosed) {
-        final alert = NoticeItem(
-          id: 'ALERT-${timer.tick}',
-          title: '🚨 긴급 공지 (${timer.tick}차): 데이터베이스 리전 네트워크 순단 감지',
-          content: '인프라 엔지니어링 긴급 대응팀이 즉시 투입되어 우회 경로를 확보 중입니다.',
-          category: '긴급',
-          createdAt: DateTime.now(),
-          isUrgent: true,
-        );
-        _urgentNoticeStreamController.add(alert);
-      }
+    // Isolate Worker에게 백그라운드 필터링 위임 (메인 UI 프레임 유지)
+    final results = await NoticeService.searchFilterWithIsolate(
+      list: _allNotices,
+      query: text,
+    );
+
+    setState(() {
+      _filteredNotices = results;
+      _isFiltering = false;
     });
-
-    // 실시간 스트림 구독 및 UI 상태 동기화
-    _urgentNoticeSubscription = _urgentNoticeStreamController.stream.listen((
-      urgentNotice,
-    ) {
-      if (mounted) {
-        setState(() {
-          _latestUrgentNotice = urgentNotice;
-        });
-      }
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // [AC-3 충족]: compute() 기반 Web-Safe 백그라운드 고속 전문 검색
-  // --------------------------------------------------------------------------
-  Future<void> _handleSearch(String query) async {
-    final trimmedQuery = query.trim();
-
-    if (trimmedQuery.isEmpty) {
-      setState(() => _displayedNotices = _allNotices);
-      return;
-    }
-
-    setState(() => _isSearching = true);
-
-    try {
-      // Isolate 격리 메모리 안전 전달을 위한 Map 직렬화
-      final payload = {
-        'notices': _allNotices.map((notice) => notice.toMap()).toList(),
-        'query': trimmedQuery,
-      };
-
-      // compute() 실행: Chrome에서는 이벤트 루프 비차단 방식으로, 모바일에서는 Worker Isolate로 실행
-      final List<Map<String, dynamic>> rawResults = await compute(
-        _filterNoticesInBackground,
-        payload,
-      );
-
-      if (mounted) {
-        setState(() {
-          _displayedNotices = rawResults
-              .map((map) => NoticeItem.fromMap(map))
-              .toList();
-          _isSearching = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _isSearching = false);
-      }
-    }
   }
 
   @override
@@ -295,48 +243,197 @@ class _NoticeDashboardPageState extends State<NoticeDashboardPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
         title: const Row(
           children: [
-            Icon(Icons.monitor_heart_rounded, color: Colors.white),
+            Icon(Icons.campaign_rounded, size: 28),
             SizedBox(width: 10),
             Text(
-              '엔터프라이즈 공지 관제 센터',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-                color: Colors.white,
-              ),
+              '캠퍼스 스마트 공지센터',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
             ),
           ],
         ),
-        backgroundColor: const Color(0xFF0F172A),
         actions: [
           IconButton(
-            tooltip: '공지 새로고침 (Future)',
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-            onPressed: _isLoading ? null : _fetchNotices,
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: '새로고침 (async/await)',
+            onPressed: _loadNotices,
           ),
         ],
       ),
       body: Center(
         child: ConstrainedBox(
-          // Flutter Web(Chrome) 데스크톱 해상도 대응 반응형 레이아웃
-          constraints: const BoxConstraints(maxWidth: 880),
+          constraints: const BoxConstraints(maxWidth: 820), // 웹 및 윈도우 와이드 대응
           child: Column(
             children: [
-              // 1. [AC-2] 실시간 Stream 긴급 공지 배너
-              if (_latestUrgentNotice != null) _buildUrgentBanner(),
+              // ---------------------------------------------------------------
+              // [요소 1: Stream<T> & StreamBuilder] 실시간 속보 배너
+              // ---------------------------------------------------------------
+              Container(
+                margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFFECACA)),
+                ),
+                child: StreamBuilder<String>(
+                  stream: _urgentStream,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Row(
+                        children: [
+                          SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.redAccent,
+                            ),
+                          ),
+                          SizedBox(width: 10),
+                          Text(
+                            '실시간 긴급 공지 피드 연결 중...',
+                            style: TextStyle(fontSize: 13, color: Colors.grey),
+                          ),
+                        ],
+                      );
+                    }
 
-              // 2. [AC-3] Isolate compute() 검색 바
-              _buildSearchBar(),
+                    return Row(
+                      children: [
+                        const Icon(
+                          Icons.emergency_rounded,
+                          color: Colors.redAccent,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            snapshot.data ?? '수신된 긴급 공지가 없습니다.',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFFB91C1C),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
 
-              // 3. [AC-1] Future 기반 공지사항 메인 피드
+              // ---------------------------------------------------------------
+              // [요소 2: Isolate 검색 바]
+              // ---------------------------------------------------------------
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: _onSearchChanged,
+                  decoration: InputDecoration(
+                    hintText: '공지 제목, 본문, 카테고리 검색 (Isolate 연산)',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: _isFiltering
+                        ? const Padding(
+                            padding: EdgeInsets.all(12.0),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : (_searchController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear_rounded),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    _onSearchChanged('');
+                                  },
+                                )
+                              : null),
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ---------------------------------------------------------------
+              // [요소 3: Future<T> & FutureBuilder] 공지 리스트 비동기 렌더링
+              // ---------------------------------------------------------------
               Expanded(
-                child: _isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _buildNoticeListView(),
+                child: FutureBuilder<List<NoticeItem>>(
+                  future: _noticeFuture,
+                  builder: (context, snapshot) {
+                    // [1] 로딩 상태
+                    if (snapshot.connectionState == ConnectionState.waiting &&
+                        _allNotices.isEmpty) {
+                      return const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(height: 12),
+                            Text(
+                              '서버에서 공지사항을 불러오는 중입니다... (Future)',
+                              style: TextStyle(color: Colors.black54),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    // [2] 오류 상태
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text(
+                          '공지사항 로드 중 오류가 발생했습니다: ${snapshot.error}',
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      );
+                    }
+
+                    // [3] 검색 결과 없음 상태
+                    if (_filteredNotices.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          '검색 조건과 일치하는 공지사항이 없습니다.',
+                          style: TextStyle(color: Colors.grey, fontSize: 15),
+                        ),
+                      );
+                    }
+
+                    // [4] 데이터 정상 수신 완료
+                    return ListView.separated(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _filteredNotices.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final item = _filteredNotices[index];
+                        return _buildNoticeCard(item, theme);
+                      },
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -345,218 +442,83 @@ class _NoticeDashboardPageState extends State<NoticeDashboardPage> {
     );
   }
 
-  Widget _buildUrgentBanner() {
-    final notice = _latestUrgentNotice!;
+  // 공지사항 카드 UI 컴포넌트
+  Widget _buildNoticeCard(NoticeItem item, ThemeData theme) {
     return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFFEF2F2),
-        border: Border.all(color: const Color(0xFFFCA5A5)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Padding(
-            padding: EdgeInsets.only(top: 2),
-            child: Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626)),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  notice.title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF991B1B),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  notice.content,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF7F1D1D),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: '배너 닫기',
-            icon: const Icon(
-              Icons.close_rounded,
-              size: 18,
-              color: Color(0xFF991B1B),
-            ),
-            onPressed: () => setState(() => _latestUrgentNotice = null),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: item.isUrgent ? Colors.red.shade200 : Colors.grey.shade200,
+          width: item.isUrgent ? 1.5 : 1.0,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSearchBar() {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: TextField(
-        controller: _searchController,
-        onChanged: _handleSearch,
-        decoration: InputDecoration(
-          hintText: '공지 제목 또는 본문 검색 (compute 백그라운드 필터링)...',
-          prefixIcon: const Icon(Icons.search_rounded),
-          suffixIcon: _isSearching
-              // 유효하지 않은 const 제거 규격 준수
-              ? Transform.scale(
-                  scale: 0.5,
-                  child: const CircularProgressIndicator(strokeWidth: 2),
-                )
-              : (_searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear_rounded),
-                        onPressed: () {
-                          _searchController.clear();
-                          _handleSearch('');
-                        },
-                      )
-                    : null),
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: item.isUrgent
+                ? const Color(0xFFFEE2E2)
+                : theme.colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(8),
           ),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 14,
+          child: Text(
+            item.category,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: item.isUrgent
+                  ? Colors.red.shade800
+                  : theme.colorScheme.onPrimaryContainer,
+            ),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildNoticeListView() {
-    if (_displayedNotices.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        title: Row(
           children: [
-            const Icon(
-              Icons.search_off_rounded,
-              size: 48,
-              color: Color(0xFF94A3B8),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              _searchController.text.isEmpty
-                  ? '등록된 공지사항이 없습니다.'
-                  : "'${_searchController.text}'에 대한 검색 결과가 없습니다.",
-              style: const TextStyle(color: Color(0xFF64748B), fontSize: 14),
+            if (item.isUrgent) ...[
+              const Icon(
+                Icons.priority_high_rounded,
+                size: 16,
+                color: Colors.red,
+              ),
+              const SizedBox(width: 4),
+            ],
+            Expanded(
+              child: Text(
+                item.title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
             ),
           ],
         ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _fetchNotices,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: _displayedNotices.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 10),
-        itemBuilder: (context, index) {
-          final notice = _displayedNotices[index];
-          final isSystem = notice.category == '시스템';
-          final isTerms = notice.category == '약관';
-
-          return Card(
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: Color(0xFFE2E8F0)),
-            ),
-            color: Colors.white,
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 8,
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.content,
+                style: const TextStyle(color: Colors.black87, fontSize: 13),
               ),
-              leading: CircleAvatar(
-                backgroundColor: isSystem
-                    ? const Color(0xFFE0F2FE)
-                    : (isTerms
-                          ? const Color(0xFFFEF3C7)
-                          : const Color(0xFFF1F5F9)),
-                child: Icon(
-                  isSystem
-                      ? Icons.dns_rounded
-                      : (isTerms
-                            ? Icons.description_rounded
-                            : Icons.info_outline_rounded),
-                  color: isSystem
-                      ? const Color(0xFF0284C7)
-                      : (isTerms
-                            ? const Color(0xFFD97706)
-                            : const Color(0xFF475569)),
-                ),
+              const SizedBox(height: 6),
+              Text(
+                '게시일: ${item.date}',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
               ),
-              title: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 2,
-                    ),
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF1F5F9),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      notice.category,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF475569),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      notice.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              subtitle: Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  notice.content,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF64748B),
-                  ),
-                ),
-              ),
-              trailing: Text(
-                '${notice.createdAt.hour.toString().padLeft(2, '0')}:${notice.createdAt.minute.toString().padLeft(2, '0')}',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-              ),
-            ),
-          );
-        },
+            ],
+          ),
+        ),
       ),
     );
   }
